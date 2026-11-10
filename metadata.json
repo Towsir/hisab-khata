@@ -1,0 +1,6 @@
+{
+  "name": "Hishab Khata",
+  "description": "Business Income & Expense Tracker, Customer Due Ledger, and Financial Reports",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
