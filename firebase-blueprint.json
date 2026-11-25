@@ -1,0 +1,280 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated merchant account profile storing business display name, phone number, and contact email.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the account owner."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Merchant or business display name."
+        },
+        "phoneNumber": {
+          "type": "string",
+          "description": "Business phone number."
+        },
+        "email": {
+          "type": "string",
+          "description": "Business or account email address."
+        },
+        "linkedOwnerId": {
+          "type": "string",
+          "description": "Optional UID of an existing shop owner when this device is linked to another shop profile."
+        },
+        "activeLinkTokenHash": {
+          "type": "string",
+          "description": "Optional SHA-256 hash of the shop owner's currently active 6-digit device link code."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp written via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp written via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["userId", "displayName", "phoneNumber", "email", "createdAt", "updatedAt"]
+    },
+    "ShopLinkRecord": {
+      "title": "ShopLinkRecord",
+      "description": "Short-lived, zero-PII SHA-256 invite token allowing a secondary device to link to an existing shop profile using owner email and a rotating 6-digit code.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the primary shop owner."
+        },
+        "shopName": {
+          "type": "string",
+          "description": "Display name of the shop being linked."
+        },
+        "expiresAt": {
+          "type": "integer",
+          "description": "Expiration epoch timestamp in milliseconds."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp written via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp written via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["ownerId", "shopName", "expiresAt", "createdAt", "updatedAt"]
+    },
+    "LinkedDeviceRecord": {
+      "title": "LinkedDeviceRecord",
+      "description": "Authorized secondary device linked to a shop owner's ledger, supporting live access and instant owner revocation.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the primary shop owner."
+        },
+        "deviceUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the linked secondary device."
+        },
+        "deviceName": {
+          "type": "string",
+          "description": "Human-readable Android device name (manufacturer and model)."
+        },
+        "deviceEmail": {
+          "type": "string",
+          "description": "Google account email signed in on the linked device."
+        },
+        "tokenHash": {
+          "type": "string",
+          "description": "SHA-256 shop link token hash used to authorize this device."
+        },
+        "linkedAt": {
+          "type": "integer",
+          "description": "Epoch timestamp in milliseconds when the device was linked."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp written via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp written via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["ownerId", "deviceUid", "deviceName", "deviceEmail", "tokenHash", "linkedAt", "createdAt", "updatedAt"]
+    },
+    "TransactionRecord": {
+      "title": "TransactionRecord",
+      "description": "Individual business Income or Expense ledger entry.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the account owner."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["INCOME", "EXPENSE"],
+          "description": "Transaction direction: INCOME or EXPENSE."
+        },
+        "category": {
+          "type": "string",
+          "description": "Category label such as Cash Sales, Wholesale, Inventory, Rent, Salary."
+        },
+        "amount": {
+          "type": "number",
+          "description": "Positive monetary amount in BDT."
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional memo or description."
+        },
+        "timestamp": {
+          "type": "integer",
+          "description": "Transaction epoch timestamp in milliseconds."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp written via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp written via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["userId", "type", "category", "amount", "note", "timestamp", "createdAt", "updatedAt"]
+    },
+    "CustomerRecord": {
+      "title": "CustomerRecord",
+      "description": "Customer credit/due ledger summary document.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the account owner."
+        },
+        "name": {
+          "type": "string",
+          "description": "Customer name."
+        },
+        "phone": {
+          "type": "string",
+          "description": "Customer phone number."
+        },
+        "address": {
+          "type": "string",
+          "description": "Customer shop or village address."
+        },
+        "totalCredit": {
+          "type": "number",
+          "description": "Total cumulative goods value given on credit in BDT."
+        },
+        "totalPaid": {
+          "type": "number",
+          "description": "Total cumulative payments received from customer in BDT."
+        },
+        "currentDue": {
+          "type": "number",
+          "description": "Remaining due balance in BDT."
+        },
+        "lastUpdated": {
+          "type": "integer",
+          "description": "Last activity epoch timestamp in milliseconds."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp written via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp written via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["userId", "name", "phone", "address", "totalCredit", "totalPaid", "currentDue", "lastUpdated", "createdAt", "updatedAt"]
+    },
+    "DueEntryRecord": {
+      "title": "DueEntryRecord",
+      "description": "Editable credit or payment line item inside a customer's due ledger.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the account owner."
+        },
+        "customerId": {
+          "type": "string",
+          "description": "Parent customer document ID."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["GOODS_TAKEN", "PAYMENT_RECEIVED", "ADVANCE_PAYMENT"],
+          "description": "Entry type: GOODS_TAKEN, PAYMENT_RECEIVED, or ADVANCE_PAYMENT."
+        },
+        "amount": {
+          "type": "number",
+          "description": "Positive monetary amount in BDT."
+        },
+        "itemsDescription": {
+          "type": "string",
+          "description": "Description of goods taken or payment note."
+        },
+        "timestamp": {
+          "type": "integer",
+          "description": "Entry epoch timestamp in milliseconds."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp written via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp written via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["userId", "customerId", "type", "amount", "itemsDescription", "timestamp", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/shopLinks/{tokenHash}": {
+      "schema": { "$ref": "#/entities/ShopLinkRecord" },
+      "description": "Short-lived zero-PII SHA-256 link tokens for connecting another device by email and 6-digit code."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Authenticated merchant profile with name, phone number, email, and optional multi-device link state."
+    },
+    "/users/{userId}/linkedDevices/{deviceUid}": {
+      "schema": { "$ref": "#/entities/LinkedDeviceRecord" },
+      "description": "Secondary devices authorized to sync with this merchant's ledger."
+    },
+    "/users/{userId}/transactions/{transactionId}": {
+      "schema": { "$ref": "#/entities/TransactionRecord" },
+      "description": "Merchant's cloud-synced Income and Expense transactions."
+    },
+    "/users/{userId}/customers/{customerId}": {
+      "schema": { "$ref": "#/entities/CustomerRecord" },
+      "description": "Merchant's customer due accounts."
+    },
+    "/users/{userId}/customers/{customerId}/dueEntries/{entryId}": {
+      "schema": { "$ref": "#/entities/DueEntryRecord" },
+      "description": "Editable credit and payment audit entries for each customer."
+    }
+  }
+}

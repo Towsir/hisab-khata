@@ -8,8 +8,47 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+
+@Immutable
+data class LedgerColors(
+    val income: Color,
+    val incomeContainer: Color,
+    val expense: Color,
+    val expenseContainer: Color,
+    val dueAmber: Color,
+    val dueAmberContainer: Color
+)
+
+private val LightLedgerColors = LedgerColors(
+    income = IncomeGreen,
+    incomeContainer = IncomeGreenContainer,
+    expense = ExpenseRed,
+    expenseContainer = ExpenseRedContainer,
+    dueAmber = DueAmber,
+    dueAmberContainer = DueAmberContainer
+)
+
+private val DarkLedgerColors = LedgerColors(
+    income = IncomeGreenDark,
+    incomeContainer = IncomeGreenContainerDark,
+    expense = ExpenseRedDark,
+    expenseContainer = ExpenseRedContainerDark,
+    dueAmber = DueAmberDark,
+    dueAmberContainer = DueAmberContainerDark
+)
+
+val LocalLedgerColors = staticCompositionLocalOf { LightLedgerColors }
+
+val MaterialTheme.ledgerColors: LedgerColors
+    @Composable
+    @ReadOnlyComposable
+    get() = LocalLedgerColors.current
 
 private val DarkColorScheme = darkColorScheme(
     primary = SlatePrimaryDark,
@@ -65,10 +104,13 @@ fun MyApplicationTheme(
         darkTheme -> DarkColorScheme
         else -> LightColorScheme
     }
+    val ledgerColors = if (darkTheme) DarkLedgerColors else LightLedgerColors
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = Typography,
-        content = content
-    )
+    CompositionLocalProvider(LocalLedgerColors provides ledgerColors) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = Typography,
+            content = content
+        )
+    }
 }

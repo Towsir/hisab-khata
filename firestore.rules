@@ -1,0 +1,265 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HARDENED PRIMITIVES ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isLinkedDevice(userId) {
+      return isSignedIn() &&
+             exists(/databases/$(database)/documents/users/$(userId)/linkedDevices/$(request.auth.uid));
+    }
+
+    function isOwnerOrLinkedDevice(userId) {
+      return isOwner(userId) || isLinkedDevice(userId);
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isNumber(val) {
+      return val is int || val is float;
+    }
+
+    function hasValidShopLink(ownerId, tokenHash) {
+      return isValidId(tokenHash) &&
+             exists(/databases/$(database)/documents/shopLinks/$(tokenHash)) &&
+             get(/databases/$(database)/documents/shopLinks/$(tokenHash)).data.ownerId == ownerId &&
+             get(/databases/$(database)/documents/shopLinks/$(tokenHash)).data.expiresAt > request.time.toMillis();
+    }
+
+    // --- ENTITY VALIDATION HELPERS ---
+
+    function isValidUserProfile(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+             data.phoneNumber is string && data.phoneNumber.size() <= 30 &&
+             data.email is string && data.email.size() <= 120 &&
+             (!('linkedOwnerId' in data) || (data.linkedOwnerId is string && (data.linkedOwnerId == '' || isValidId(data.linkedOwnerId)) && data.linkedOwnerId != userId)) &&
+             (!('activeLinkTokenHash' in data) || (data.activeLinkTokenHash is string && (data.activeLinkTokenHash == '' || isValidId(data.activeLinkTokenHash))));
+    }
+
+    function isValidShopLink(data) {
+      return data.ownerId is string && isValidId(data.ownerId) &&
+             data.shopName is string && data.shopName.size() >= 1 && data.shopName.size() <= 80 &&
+             data.expiresAt is int &&
+             data.expiresAt > request.time.toMillis() &&
+             data.expiresAt <= request.time.toMillis() + 3600000;
+    }
+
+    function isValidLinkedDevice(data, ownerId, deviceUid) {
+      return data.ownerId is string && data.ownerId == ownerId &&
+             data.deviceUid is string && data.deviceUid == deviceUid &&
+             data.deviceName is string && data.deviceName.size() >= 1 && data.deviceName.size() <= 80 &&
+             data.deviceEmail is string && data.deviceEmail.size() <= 120 &&
+             data.tokenHash is string && isValidId(data.tokenHash) &&
+             data.linkedAt is int && data.linkedAt >= 0;
+    }
+
+    function isValidTransaction(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.type is string && data.type in ['INCOME', 'EXPENSE'] &&
+             data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
+             isNumber(data.amount) && data.amount > 0 && data.amount <= 1000000000 &&
+             data.note is string && data.note.size() <= 300 &&
+             data.timestamp is int && data.timestamp >= 0;
+    }
+
+    function isValidCustomer(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.phone is string && data.phone.size() <= 30 &&
+             data.address is string && data.address.size() <= 150 &&
+             isNumber(data.totalCredit) && data.totalCredit >= 0 && data.totalCredit <= 1000000000 &&
+             isNumber(data.totalPaid) && data.totalPaid >= 0 && data.totalPaid <= 1000000000 &&
+             isNumber(data.currentDue) && data.currentDue >= 0 && data.currentDue <= 1000000000 &&
+             data.lastUpdated is int && data.lastUpdated >= 0;
+    }
+
+    function isValidDueEntry(data, userId, customerId) {
+      return data.userId is string && data.userId == userId &&
+             data.customerId is string && data.customerId == customerId &&
+             data.type is string && data.type in ['GOODS_TAKEN', 'PAYMENT_RECEIVED', 'ADVANCE_PAYMENT'] &&
+             isNumber(data.amount) && data.amount > 0 && data.amount <= 1000000000 &&
+             data.itemsDescription is string && data.itemsDescription.size() <= 300 &&
+             data.timestamp is int && data.timestamp >= 0;
+    }
+
+    // --- COLLECTION RULES ---
+
+    // Short-lived zero-PII SHA-256 link tokens (non-enumerable)
+    match /shopLinks/{tokenHash} {
+      allow get: if isSignedIn() && isValidId(tokenHash);
+      allow list: if false;
+
+      allow create: if isSignedIn() &&
+                       isValidId(tokenHash) &&
+                       incoming().keys().hasAll(['ownerId', 'shopName', 'expiresAt', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['ownerId', 'shopName', 'expiresAt', 'createdAt', 'updatedAt']) &&
+                       isOwner(incoming().ownerId) &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidShopLink(incoming());
+
+      allow update: if false;
+
+      allow delete: if isSignedIn() && isValidId(tokenHash) && isOwner(existing().ownerId);
+    }
+
+    match /users/{userId} {
+      allow get: if isOwnerOrLinkedDevice(userId) && isValidId(userId);
+      allow list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'phoneNumber', 'email', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'displayName', 'phoneNumber', 'email', 'linkedOwnerId', 'activeLinkTokenHash', 'createdAt', 'updatedAt']) &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidUserProfile(incoming(), userId);
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidUserProfile(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phoneNumber', 'email', 'linkedOwnerId', 'activeLinkTokenHash', 'updatedAt']);
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      // Authorized Secondary Devices Subcollection
+      match /linkedDevices/{deviceUid} {
+        allow get: if (isOwner(userId) || isOwner(deviceUid)) && isValidId(userId) && isValidId(deviceUid);
+        allow list: if isOwner(userId) && isValidId(userId);
+
+        allow create: if isOwner(deviceUid) &&
+                         deviceUid != userId &&
+                         isValidId(userId) &&
+                         isValidId(deviceUid) &&
+                         incoming().keys().hasAll(['ownerId', 'deviceUid', 'deviceName', 'deviceEmail', 'tokenHash', 'linkedAt', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['ownerId', 'deviceUid', 'deviceName', 'deviceEmail', 'tokenHash', 'linkedAt', 'createdAt', 'updatedAt']) &&
+                         incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                         isValidLinkedDevice(incoming(), userId, deviceUid) &&
+                         hasValidShopLink(userId, incoming().tokenHash);
+
+        allow update: if isOwner(deviceUid) &&
+                         deviceUid != userId &&
+                         isValidId(userId) &&
+                         isValidId(deviceUid) &&
+                         isValidLinkedDevice(incoming(), userId, deviceUid) &&
+                         incoming().ownerId == existing().ownerId &&
+                         incoming().deviceUid == existing().deviceUid &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['deviceName', 'deviceEmail', 'tokenHash', 'linkedAt', 'updatedAt']) &&
+                         hasValidShopLink(userId, incoming().tokenHash);
+
+        allow delete: if (isOwner(userId) || isOwner(deviceUid)) && isValidId(userId) && isValidId(deviceUid);
+      }
+
+      // Transactions Subcollection (Income / Expense)
+      match /transactions/{transactionId} {
+        allow get: if isOwnerOrLinkedDevice(userId) && isValidId(transactionId);
+        allow list: if isOwnerOrLinkedDevice(userId);
+
+        allow create: if isOwnerOrLinkedDevice(userId) &&
+                         isValidId(transactionId) &&
+                         incoming().keys().hasAll(['userId', 'type', 'category', 'amount', 'note', 'timestamp', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'type', 'category', 'amount', 'note', 'timestamp', 'createdAt', 'updatedAt']) &&
+                         incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                         isValidTransaction(incoming(), userId);
+
+        allow update: if isOwnerOrLinkedDevice(userId) &&
+                         isValidId(transactionId) &&
+                         isValidTransaction(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['type', 'category', 'amount', 'note', 'timestamp', 'updatedAt']);
+
+        allow delete: if isOwnerOrLinkedDevice(userId) && isValidId(transactionId);
+      }
+
+      // Customers Subcollection (Due Ledger)
+      match /customers/{customerId} {
+        allow get: if isOwnerOrLinkedDevice(userId) && isValidId(customerId);
+        allow list: if isOwnerOrLinkedDevice(userId);
+
+        allow create: if isOwnerOrLinkedDevice(userId) &&
+                         isValidId(customerId) &&
+                         incoming().keys().hasAll(['userId', 'name', 'phone', 'address', 'totalCredit', 'totalPaid', 'currentDue', 'lastUpdated', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'name', 'phone', 'address', 'totalCredit', 'totalPaid', 'currentDue', 'lastUpdated', 'createdAt', 'updatedAt']) &&
+                         incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                         isValidCustomer(incoming(), userId);
+
+        allow update: if isOwnerOrLinkedDevice(userId) &&
+                         isValidId(customerId) &&
+                         isValidCustomer(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                         (
+                           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'address', 'lastUpdated', 'updatedAt']) ||
+                           incoming().diff(existing()).affectedKeys().hasOnly(['totalCredit', 'totalPaid', 'currentDue', 'lastUpdated', 'updatedAt'])
+                         );
+
+        allow delete: if isOwnerOrLinkedDevice(userId) && isValidId(customerId);
+
+        // Due Entries Subcollection (Goods Taken / Payment Received)
+        match /dueEntries/{entryId} {
+          allow get: if isOwnerOrLinkedDevice(userId) && isValidId(customerId) && isValidId(entryId);
+          allow list: if isOwnerOrLinkedDevice(userId) && isValidId(customerId);
+
+          allow create: if isOwnerOrLinkedDevice(userId) &&
+                           isValidId(customerId) &&
+                           isValidId(entryId) &&
+                           incoming().keys().hasAll(['userId', 'customerId', 'type', 'amount', 'itemsDescription', 'timestamp', 'createdAt', 'updatedAt']) &&
+                           incoming().keys().hasOnly(['userId', 'customerId', 'type', 'amount', 'itemsDescription', 'timestamp', 'createdAt', 'updatedAt']) &&
+                           incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                           incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                           isValidDueEntry(incoming(), userId, customerId) &&
+                           (
+                             exists(/databases/$(database)/documents/users/$(userId)/customers/$(customerId)) ||
+                             existsAfter(/databases/$(database)/documents/users/$(userId)/customers/$(customerId))
+                           );
+
+          allow update: if isOwnerOrLinkedDevice(userId) &&
+                           isValidId(customerId) &&
+                           isValidId(entryId) &&
+                           isValidDueEntry(incoming(), userId, customerId) &&
+                           incoming().userId == existing().userId &&
+                           incoming().customerId == existing().customerId &&
+                           incoming().createdAt == existing().createdAt &&
+                           incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['type', 'amount', 'itemsDescription', 'timestamp', 'updatedAt']);
+
+          allow delete: if isOwnerOrLinkedDevice(userId) && isValidId(customerId) && isValidId(entryId);
+        }
+      }
+    }
+  }
+}

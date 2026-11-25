@@ -24,8 +24,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -43,14 +41,14 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.theme.ExpenseRed
-import com.example.ui.theme.ExpenseRedContainer
-import com.example.ui.theme.IncomeGreen
-import com.example.ui.theme.IncomeGreenContainer
+import com.example.ui.theme.ledgerColors
 
 data class CategoryShare(
     val category: String,
@@ -67,6 +65,7 @@ fun ExpenseDonutChart(
     modifier: Modifier = Modifier
 ) {
     val progress = remember { Animatable(0f) }
+    val haptic = LocalHapticFeedback.current
     var selectedCategory by remember { mutableStateOf<CategoryShare?>(null) }
 
     LaunchedEffect(categoryShares) {
@@ -77,14 +76,11 @@ fun ExpenseDonutChart(
         )
     }
 
-    Card(
+    LiquidGlassCard(
         modifier = modifier
             .fillMaxWidth()
             .testTag("expense_donut_chart_card"),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        cornerRadius = 24.dp
     ) {
         Column(
             modifier = Modifier
@@ -248,6 +244,7 @@ fun ExpenseDonutChart(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
                                 .clickable {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                     selectedCategory = if (isSelected) null else share
                                 }
                         ) {
@@ -292,6 +289,7 @@ fun MonthlyCashFlowSummaryCard(
     marginPercentage: Double,
     modifier: Modifier = Modifier
 ) {
+    val ledgerColors = MaterialTheme.ledgerColors
     val totalFlow = (totalIncome + totalExpense).toFloat()
     val incomeRatioTarget = if (totalFlow > 0f) (totalIncome.toFloat() / totalFlow) else 0.5f
     val animatedRatio by animateFloatAsState(
@@ -300,132 +298,154 @@ fun MonthlyCashFlowSummaryCard(
         label = "flowRatio"
     )
 
-    Card(
+    val netAccent = if (netProfit >= 0) ledgerColors.income else ledgerColors.expense
+
+    LiquidGlassCard(
         modifier = modifier
             .fillMaxWidth()
             .testTag("monthly_cashflow_summary_card"),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        cornerRadius = 24.dp,
+        accentTint = netAccent,
+        shimmerEnabled = true
     ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Cash Flow Overview",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (netProfit >= 0) IncomeGreenContainer else ExpenseRedContainer
-                ) {
-                    Text(
-                        text = if (netProfit >= 0) "Profitable (+${String.format("%.1f", marginPercentage)}%)" else "Operating Loss",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = if (netProfit >= 0) IncomeGreen else ExpenseRed,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column {
-                    Text(
-                        text = "Total Inflow (আয়)",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "+ " + CurrencyUtils.formatBdt(totalIncome),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = IncomeGreen
-                    )
-                }
-
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = "Total Outflow (খরচ)",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "− " + CurrencyUtils.formatBdt(totalExpense),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = ExpenseRed
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Dual Progress Comparison Bar
-            Box(
+        Box(modifier = Modifier.fillMaxWidth()) {
+            AmbientWaveGraphic(
+                accentColor = netAccent,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(ExpenseRed.copy(alpha = 0.2f))
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(fraction = animatedRatio.coerceIn(0f, 1f))
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(IncomeGreen)
-                )
-            }
+                    .height(54.dp)
+                    .align(Alignment.BottomCenter)
+            )
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Net Profit Neutral Card
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            Column(modifier = Modifier.padding(20.dp)) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Text(
+                        text = "Cash Flow Overview",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (netProfit >= 0) ledgerColors.incomeContainer else ledgerColors.expenseContainer
+                    ) {
                         Text(
-                            text = if (netProfit >= 0) "Net Business Profit (নিট লাভ)" else "Net Operating Loss (নিট ক্ষতি)",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Revenue Margin: ${String.format("%.1f", marginPercentage)}%",
+                            text = if (netProfit >= 0) "Profitable (+${String.format("%.1f", marginPercentage)}%)" else "Operating Loss",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            fontWeight = FontWeight.Bold,
+                            color = netAccent,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Total Inflow (আয়)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        RollingBdtCounter(
+                            amount = totalIncome,
+                            prefix = "+ ",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = ledgerColors.income
                         )
                     }
 
-                    Text(
-                        text = CurrencyUtils.formatBdt(netProfit),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = if (netProfit >= 0) IncomeGreen else ExpenseRed
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.End
+                    ) {
+                        Text(
+                            text = "Total Outflow (খরচ)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        RollingBdtCounter(
+                            amount = totalExpense,
+                            prefix = "− ",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = ledgerColors.expense
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Dual Progress Comparison Bar
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(ledgerColors.expense.copy(alpha = 0.25f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(fraction = animatedRatio.coerceIn(0f, 1f))
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(ledgerColors.income)
                     )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Net Profit Frosted Sub-Card
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.78f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (netProfit >= 0) "Net Business Profit (নিট লাভ)" else "Net Operating Loss (নিট ক্ষতি)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Revenue Margin: ${String.format("%.1f", marginPercentage)}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        RollingBdtCounter(
+                            amount = netProfit,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = netAccent
+                        )
+                    }
                 }
             }
         }

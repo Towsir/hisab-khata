@@ -12,18 +12,25 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CalendarToday
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -31,79 +38,118 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import com.example.data.entity.CustomerEntity
-import com.example.ui.theme.ExpenseRed
-import com.example.ui.theme.IncomeGreen
+import com.example.data.FirestoreBusinessRepository
+import com.example.data.model.CustomerRecord
+import com.example.ui.theme.ledgerColors
 
 enum class DueAdjustmentMode {
-    ADD_ITEMS,      // Customer takes more goods on credit
-    COLLECT_PAYMENT // Customer pays off part or all of their balance
+    ADD_ITEMS,       // Customer takes goods on credit
+    COLLECT_PAYMENT, // Customer pays toward due (any surplus becomes advance)
+    ADVANCE_PAYMENT  // Customer leaves advance payment deposit
 }
 
 private val QUICK_AMOUNTS = listOf(100, 500, 1000, 2000, 5000)
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AdjustDueDialog(
-    customer: CustomerEntity,
+    customer: CustomerRecord,
     mode: DueAdjustmentMode,
     onDismiss: () -> Unit,
-    onAddCredit: (customerId: Long, amount: Double, itemDescription: String) -> Unit,
-    onRecordPayment: (customerId: Long, amount: Double, note: String, addToIncome: Boolean) -> Unit
+    onAddCredit: (customerId: String, amount: Double, itemDescription: String, timestamp: Long) -> Unit,
+    onRecordPayment: (customerId: String, amount: Double, note: String, isAdvance: Boolean, timestamp: Long) -> Unit
 ) {
+    Dialog(onDismissRequest = onDismiss) {
+        AdjustDueDialogContent(
+            customer = customer,
+            mode = mode,
+            onDismiss = onDismiss,
+            onAddCredit = onAddCredit,
+            onRecordPayment = onRecordPayment
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun AdjustDueDialogContent(
+    customer: CustomerRecord,
+    mode: DueAdjustmentMode,
+    onDismiss: () -> Unit,
+    onAddCredit: (customerId: String, amount: Double, itemDescription: String, timestamp: Long) -> Unit,
+    onRecordPayment: (customerId: String, amount: Double, note: String, isAdvance: Boolean, timestamp: Long) -> Unit
+) {
+    val ledgerColors = MaterialTheme.ledgerColors
+    val haptic = LocalHapticFeedback.current
+    var activeMode by remember(mode, customer.id) { mutableStateOf(mode) }
     var amountText by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
-    var addToIncome by remember { mutableStateOf(true) }
+    var selectedTimestamp by remember(customer.id, mode) { mutableLongStateOf(System.currentTimeMillis()) }
+    var showDatePicker by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    val amountDouble = amountText.toDoubleOrNull() ?: 0.0
-    val isAdd = mode == DueAdjustmentMode.ADD_ITEMS
+    val amountDouble = CurrencyUtils.parseAmountInput(amountText)?.takeIf { it > 0.0 } ?: 0.0
+    val isAdd = activeMode == DueAdjustmentMode.ADD_ITEMS
+    val isAdvance = activeMode == DueAdjustmentMode.ADVANCE_PAYMENT
 
-    val calculatedNewDue = if (isAdd) {
-        customer.currentDue + amountDouble
-    } else {
-        maxOf(0.0, customer.currentDue - amountDouble)
-    }
+    // Live projected net due / advance preview (rounded cleanly to 2 decimals)
+    val projectedNetDue = CurrencyUtils.roundCurrency(
+        if (isAdd) {
+            (customer.totalCredit + amountDouble) - customer.totalPaid
+        } else {
+            customer.totalCredit - (customer.totalPaid + amountDouble)
+        }
+    )
 
-    val actionColor = if (isAdd) ExpenseRed else IncomeGreen
+    val actionColor = if (isAdd) ledgerColors.expense else ledgerColors.income
 
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 4.dp,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("adjust_due_dialog")
-        ) {
+    Surface(
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("adjust_due_dialog")
+    ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(22.dp)
             ) {
-                // Header Row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (isAdd) "Add Goods (+ বাকি)" else "Collect Payment (− জমা)",
+                            text = when (activeMode) {
+                                DueAdjustmentMode.ADD_ITEMS -> "Add Credit (+ বাকি)"
+                                DueAdjustmentMode.ADVANCE_PAYMENT -> "Advance Payment (অগ্রিম)"
+                                DueAdjustmentMode.COLLECT_PAYMENT -> "Due Payment (জমা)"
+                            },
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             color = actionColor
@@ -111,96 +157,176 @@ fun AdjustDueDialog(
                         Text(
                             text = customer.name,
                             style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
 
                     IconButton(
                         onClick = onDismiss,
                         modifier = Modifier
-                            .size(36.dp)
-                            .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                            .minimumInteractiveComponentSize()
                             .testTag("close_adjust_due_btn")
                     ) {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "Close",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
-                        )
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Close",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                // Clean segmented toggle between Due Payment and Advance when paying
+                if (!isAdd) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+                            .padding(4.dp)
+                    ) {
+                        val payBg by animateColorAsState(
+                            targetValue = if (!isAdvance) MaterialTheme.colorScheme.surface else Color.Transparent,
+                            animationSpec = spring(),
+                            label = "payBg"
+                        )
+                        val advBg by animateColorAsState(
+                            targetValue = if (isAdvance) MaterialTheme.colorScheme.surface else Color.Transparent,
+                            animationSpec = spring(),
+                            label = "advBg"
+                        )
 
-                // Interactive Balance Transformation Card
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(payBg)
+                                .clickable {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    activeMode = DueAdjustmentMode.COLLECT_PAYMENT
+                                }
+                                .padding(vertical = 10.dp)
+                                .testTag("mode_pay_due_tab"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Pay Due",
+                                fontWeight = if (!isAdvance) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (!isAdvance) ledgerColors.income else MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 13.sp
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(advBg)
+                                .clickable {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    activeMode = DueAdjustmentMode.ADVANCE_PAYMENT
+                                }
+                                .padding(vertical = 10.dp)
+                                .testTag("mode_advance_tab"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Advance (অগ্রিম)",
+                                fontWeight = if (isAdvance) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (isAdvance) ledgerColors.income else MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Clean Current -> Updated Status Strip
                 Surface(
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(14.dp),
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column {
                             Text(
-                                text = "Current Due (বর্তমান বাকি)",
+                                text = if (customer.advanceBalance > 0) "Current Advance" else "Current Due",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = CurrencyUtils.formatBdt(customer.currentDue),
+                                text = if (customer.advanceBalance > 0) CurrencyUtils.formatBdt(customer.advanceBalance)
+                                else CurrencyUtils.formatBdt(customer.currentDue),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = if (customer.advanceBalance > 0) ledgerColors.income else MaterialTheme.colorScheme.onSurface
                             )
                         }
 
-                        Text(
-                            text = if (isAdd) "+" else "−",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = actionColor
-                        )
-
                         Column(horizontalAlignment = Alignment.End) {
+                            val newLabel = when {
+                                projectedNetDue > 0 -> "New Due"
+                                projectedNetDue < 0 -> "Advance Balance"
+                                else -> "Settled"
+                            }
+                            val newValue = when {
+                                projectedNetDue > 0 -> CurrencyUtils.formatBdt(projectedNetDue)
+                                projectedNetDue < 0 -> CurrencyUtils.formatBdt(-projectedNetDue)
+                                else -> "৳0"
+                            }
                             Text(
-                                text = "Updated Due (নতুন বাকি)",
+                                text = newLabel,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = CurrencyUtils.formatBdt(calculatedNewDue),
+                                text = newValue,
                                 style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = if (calculatedNewDue > 0) ExpenseRed else IncomeGreen
+                                fontWeight = FontWeight.Bold,
+                                color = if (projectedNetDue > 0) ledgerColors.expense else ledgerColors.income,
+                                modifier = Modifier.testTag("projected_balance_value")
                             )
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                // Amount Field
                 OutlinedTextField(
                     value = amountText,
                     onValueChange = {
                         amountText = it
                         errorMessage = null
                     },
-                    label = { Text(if (isAdd) "Amount for items taken (৳) *" else "Amount paid by customer (৳) *") },
+                    label = {
+                        Text(
+                            when (activeMode) {
+                                DueAdjustmentMode.ADD_ITEMS -> "Credit Amount (৳)"
+                                DueAdjustmentMode.ADVANCE_PAYMENT -> "Advance Amount (৳)"
+                                DueAdjustmentMode.COLLECT_PAYMENT -> "Payment Amount (৳)"
+                            }
+                        )
+                    },
                     placeholder = { Text("0") },
                     leadingIcon = {
                         Text(
                             text = "৳",
                             fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp,
+                            fontSize = 18.sp,
                             color = actionColor,
                             modifier = Modifier.padding(start = 12.dp)
                         )
@@ -225,27 +351,77 @@ fun AdjustDueDialog(
                     isError = errorMessage != null
                 )
 
-                // Quick Amount Addition Chips
+                // One-tap Full Due shortcut when collecting payment for a customer with an active due
+                if (!isAdd && customer.currentDue > 0.0) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = ledgerColors.incomeContainer,
+                        border = BorderStroke(1.dp, ledgerColors.income.copy(alpha = 0.4f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 42.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                amountText = CurrencyUtils.formatEditableAmount(customer.currentDue)
+                                activeMode = DueAdjustmentMode.COLLECT_PAYMENT
+                                errorMessage = null
+                            }
+                            .testTag("preset_full_due_chip")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DoneAll,
+                                contentDescription = null,
+                                tint = ledgerColors.income,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Full Due (${CurrencyUtils.formatBdt(customer.currentDue)})",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = ledgerColors.income
+                            )
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(10.dp))
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     QUICK_AMOUNTS.forEach { quickVal ->
                         Surface(
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(10.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
                             modifier = Modifier
                                 .weight(1f)
+                                .heightIn(min = 40.dp)
+                                .clip(RoundedCornerShape(10.dp))
                                 .clickable {
-                                    val current = amountText.toDoubleOrNull() ?: 0.0
-                                    amountText = (current + quickVal).toInt().toString()
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    val current = CurrencyUtils.parseAmountInput(amountText) ?: 0.0
+                                    val nextVal = CurrencyUtils.roundCurrency(
+                                        (current + quickVal).coerceAtMost(FirestoreBusinessRepository.MAX_AMOUNT)
+                                    )
+                                    amountText = CurrencyUtils.formatEditableAmount(nextVal)
                                     errorMessage = null
                                 }
+                                .testTag("adjust_quick_amount_$quickVal")
                         ) {
                             Box(
-                                modifier = Modifier.padding(vertical = 6.dp),
+                                modifier = Modifier.padding(vertical = 10.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
@@ -253,7 +429,8 @@ fun AdjustDueDialog(
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.SemiBold,
                                     color = MaterialTheme.colorScheme.onSurface,
-                                    fontSize = 11.sp
+                                    fontSize = 11.sp,
+                                    maxLines = 1
                                 )
                             }
                         }
@@ -269,14 +446,77 @@ fun AdjustDueDialog(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                // Item description / Payment notes
+                // Interactive Entry Date Picker Row
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            showDatePicker = true
+                        }
+                        .testTag("adjust_due_date_picker_btn")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.CalendarToday,
+                                contentDescription = "Select Date",
+                                tint = actionColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Entry Date",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = CurrencyUtils.formatRelativeDate(selectedTimestamp),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = "Change Date",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
                 OutlinedTextField(
                     value = description,
-                    onValueChange = { description = it },
-                    label = { Text(if (isAdd) "Products taken (e.g. Rice 10kg, Dal 2kg)" else "Payment note (e.g. Cash / bKash)") },
-                    placeholder = { Text(if (isAdd) "Item names or invoice notes" else "Cash received") },
+                    onValueChange = {
+                        if (it.length <= FirestoreBusinessRepository.MAX_NOTE_LENGTH) description = it
+                    },
+                    label = { Text("Note (Optional)") },
+                    placeholder = {
+                        Text(
+                            when (activeMode) {
+                                DueAdjustmentMode.ADD_ITEMS -> "e.g. Rice 10kg"
+                                DueAdjustmentMode.ADVANCE_PAYMENT -> "e.g. Advance booking"
+                                DueAdjustmentMode.COLLECT_PAYMENT -> "e.g. Cash / bKash"
+                            }
+                        )
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("adjust_due_note_input"),
@@ -288,68 +528,87 @@ fun AdjustDueDialog(
                     )
                 )
 
-                if (!isAdd) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clickable { addToIncome = !addToIncome }
-                                .padding(horizontal = 8.dp, vertical = 6.dp)
-                        ) {
-                            Checkbox(
-                                checked = addToIncome,
-                                onCheckedChange = { addToIncome = it },
-                                colors = CheckboxDefaults.colors(checkedColor = IncomeGreen),
-                                modifier = Modifier.testTag("add_to_income_checkbox")
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Add to Today's Cash Flow Income (+ আয়)",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(18.dp))
 
                 Button(
                     onClick = {
-                        val amt = amountText.toDoubleOrNull()
-                        if (amt == null || amt <= 0.0) {
-                            errorMessage = "Please enter an amount greater than 0"
-                        } else {
-                            if (isAdd) {
-                                val itemDesc = if (description.isNotBlank()) description.trim() else "Goods taken on credit"
-                                onAddCredit(customer.id, amt, itemDesc)
-                            } else {
-                                val payDesc = if (description.isNotBlank()) description.trim() else "Cash Payment"
-                                onRecordPayment(customer.id, amt, payDesc, addToIncome)
+                        val amt = CurrencyUtils.parseAmountInput(amountText)
+                        when {
+                            amt == null || !amt.isFinite() || amt <= 0.0 -> {
+                                errorMessage = "Please enter an amount greater than 0"
                             }
-                            onDismiss()
+                            amt > FirestoreBusinessRepository.MAX_AMOUNT -> {
+                                errorMessage = "Amount cannot exceed ৳1,000,000,000"
+                            }
+                            else -> {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                val roundedAmt = CurrencyUtils.roundCurrency(amt)
+                                if (isAdd) {
+                                    val itemDesc = description.trim().ifBlank { "Goods taken on credit" }
+                                    onAddCredit(customer.id, roundedAmt, itemDesc, selectedTimestamp)
+                                } else {
+                                    val payDesc = description.trim().ifBlank {
+                                        if (isAdvance) "Advance Payment" else "Cash Payment"
+                                    }
+                                    onRecordPayment(customer.id, roundedAmt, payDesc, isAdvance, selectedTimestamp)
+                                }
+                                onDismiss()
+                            }
                         }
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp)
+                        .height(50.dp)
                         .testTag("confirm_adjust_due_button"),
                     shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = actionColor)
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = actionColor,
+                        contentColor = Color.White
+                    )
                 ) {
+                    val btnLabel = when (activeMode) {
+                        DueAdjustmentMode.ADD_ITEMS -> "Add Credit ${CurrencyUtils.formatBdt(amountDouble)}"
+                        DueAdjustmentMode.ADVANCE_PAYMENT -> "Save Advance ${CurrencyUtils.formatBdt(amountDouble)}"
+                        DueAdjustmentMode.COLLECT_PAYMENT -> "Save Payment ${CurrencyUtils.formatBdt(amountDouble)}"
+                    }
                     Text(
-                        text = if (isAdd) "Confirm +${CurrencyUtils.formatBdt(amountDouble)}" else "Confirm −${CurrencyUtils.formatBdt(amountDouble)}",
-                        fontWeight = FontWeight.Bold,
+                        text = btnLabel,
+                        fontWeight = FontWeight.SemiBold,
                         fontSize = 15.sp
                     )
                 }
             }
+        }
+
+    if (showDatePicker) {
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = CurrencyUtils.localMillisToUtcDateMillis(selectedTimestamp)
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        datePickerState.selectedDateMillis?.let { pickedUtc ->
+                            selectedTimestamp = CurrencyUtils.mergeUtcDateWithLocalTime(
+                                utcDateMillis = pickedUtc,
+                                referenceLocalMillis = selectedTimestamp
+                            )
+                        }
+                        showDatePicker = false
+                    },
+                    modifier = Modifier.testTag("confirm_adjust_due_date_btn")
+                ) {
+                    Text("Select", fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) {
+                    Text("Cancel")
+                }
+            }
+        ) {
+            DatePicker(state = datePickerState)
         }
     }
 }
